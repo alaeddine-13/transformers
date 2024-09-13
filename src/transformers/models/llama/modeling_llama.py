@@ -1339,7 +1339,7 @@ class LlamaForDiverseGeneration(LlamaForCausalLM):
         num_logits_to_keep: int = 0,
         thought_embeddings: Optional[torch.Tensor] = None,  # New parameter
         lambda_distance: float = 0.2,                      # New parameter
-        k: int = 20,                                       # New parameter
+        k: int = 100,                                       # New parameter
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         # TODO: support batch size
         # Original code remains the same up to computing logits
