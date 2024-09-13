@@ -1395,7 +1395,8 @@ class LlamaForDiverseGeneration(LlamaForCausalLM):
 
             # Convert similarities to distances
             distances = 1 - mean_similarities  # Higher distances mean less similarity
-
+            print(distances)
+            print(topk_logits)
             # Adjust the top-k logits
             adjusted_topk_logits = topk_logits + lambda_distance * distances
 
