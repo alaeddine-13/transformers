@@ -53,6 +53,7 @@ else:
         "LlamaForCausalLM",
         "LlamaModel",
         "LlamaPreTrainedModel",
+        "LlamaForDiverseGeneration",
         "LlamaForSequenceClassification",
         "LlamaForQuestionAnswering",
         "LlamaForTokenClassification",
@@ -97,6 +98,7 @@ if TYPE_CHECKING:
             LlamaForQuestionAnswering,
             LlamaForSequenceClassification,
             LlamaForTokenClassification,
+            LlamaForDiverseGeneration,
             LlamaModel,
             LlamaPreTrainedModel,
         )

@@ -1311,6 +1311,131 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         return model_inputs
 
 
+class LlamaForDiverseGeneration(LlamaForCausalLM):
+    def __init__(self, config):
+        super().__init__(config)
+        self.emb_model = None
+        self.thought_embeddings = None
+        self.lambda_distance = 0.0
+        self.tokenizer = None
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        num_logits_to_keep: int = 0,
+        thought_embeddings: Optional[torch.Tensor] = None,  # New parameter
+        lambda_distance: float = 0.2,                      # New parameter
+        k: int = 20,                                       # New parameter
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        # TODO: support batch size
+        # Original code remains the same up to computing logits
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
+
+        hidden_states = outputs[0]
+
+        # Compute logits
+        if self.config.pretraining_tp > 1:
+            lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
+            logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
+            logits = torch.cat(logits, dim=-1)
+        else:
+            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :]).float()
+
+        thought_embeddings = thought_embeddings or self.thought_embeddings
+        lambda_distance = lambda_distance or self.lambda_distance
+        # Start of the new code to adjust logits
+        if thought_embeddings is not None and lambda_distance > 0 and k > 0:
+            # Get the last hidden state (assuming we're generating one token at a time)
+            last_hidden_state = hidden_states[:, -1, :]  # Shape: (batch_size, hidden_size)
+
+            # Get top-k logits and their indices
+            topk_logits, topk_indices = torch.topk(logits, k, dim=-1)
+            topk_indices = topk_indices[:, -1, :]
+
+            potential_strings = []
+            for idx in range(k):
+                # Decode the token IDs to strings
+                generated_sequence = torch.cat([input_ids, topk_indices[:, idx].unsqueeze(-1)], dim=-1)
+                decoded_string = self.tokenizer.decode(generated_sequence[0, :], skip_special_tokens=True)
+                potential_strings.append(decoded_string)
+
+            # Get embeddings of the top-k tokens
+            potential_token_embeddings = self.emb_model.encode(potential_strings)  # Shape: (batch_size, k, hidden_size)
+
+            # Compute cosine similarities
+            cosine_similarities = torch.matmul(torch.tensor(potential_token_embeddings).to(self.device), torch.tensor(self.thought_embeddings.transpose(1, 0)).to(self.device))  # Shape: (batch_size, k, num_thoughts)
+
+            # Compute mean similarity across all thoughts
+            mean_similarities = cosine_similarities.mean(dim=-1)  # Shape: (batch_size, k)
+
+            # Convert similarities to distances
+            distances = 1 - mean_similarities  # Higher distances mean less similarity
+
+            # Adjust the top-k logits
+            adjusted_topk_logits = topk_logits + lambda_distance * distances
+
+            # Create a new logits tensor and fill it with -inf
+            new_logits = torch.full_like(logits, float('-inf'))
+
+            # Scatter the adjusted logits back into the new_logits tensor
+            new_logits.scatter_(dim=-1, index=topk_indices.unsqueeze(1), src=adjusted_topk_logits)
+
+            logits = new_logits
+        else:
+            # If no adjustment is needed, use the original logits
+            logits = logits
+
+        # The rest of the code remains the same
+        # Compute loss if labels are provided
+        loss = None
+        if labels is not None:
+            logits = logits.float()
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss_fct = CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return (loss,) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
 @add_start_docstrings(
     """
     The LLaMa Model transformer with a sequence classification head on top (linear layer).

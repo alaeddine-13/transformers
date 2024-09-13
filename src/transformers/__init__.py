@@ -2513,6 +2513,7 @@ else:
             "LlamaForCausalLM",
             "LlamaForQuestionAnswering",
             "LlamaForSequenceClassification",
+            "LlamaForDiverseGeneration",
             "LlamaForTokenClassification",
             "LlamaModel",
             "LlamaPreTrainedModel",
@@ -7087,6 +7088,7 @@ if TYPE_CHECKING:
         )
         from .models.llama import (
             LlamaForCausalLM,
+            LlamaForDiverseGeneration,
             LlamaForQuestionAnswering,
             LlamaForSequenceClassification,
             LlamaForTokenClassification,
